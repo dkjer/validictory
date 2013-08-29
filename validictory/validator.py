@@ -5,6 +5,16 @@ import socket
 from datetime import datetime
 from decimal import Decimal
 from collections import Mapping, Container
+from uuid import UUID
+
+DEBUG=False
+
+def debug(mesg, params=None):
+    if DEBUG:
+        if params is not None:
+            print mesg % params
+        else:
+            print mesg
 
 if sys.version_info[0] == 3:
     _str_type = str
@@ -102,17 +112,26 @@ class SchemaValidator(object):
         schema attribute True by default.
     :param disallow_unknown_properties: defaults to False, set to True to
         disallow properties not listed in the schema definition
+    :param schemas: defaults to empty map.  Used for '$ref' lookups.
     '''
 
     def __init__(self, format_validators=None, required_by_default=True,
-                 blank_by_default=False, disallow_unknown_properties=False):
+                 blank_by_default=False, disallow_unknown_properties=False,
+                 schemas={}):
         if format_validators is None:
             format_validators = DEFAULT_FORMAT_VALIDATORS.copy()
 
+        self.schemas = schemas
         self._format_validators = format_validators
         self.required_by_default = required_by_default
         self.blank_by_default = blank_by_default
         self.disallow_unknown_properties = disallow_unknown_properties
+        # This bookkeeping is required for supporting disjoined sets of properties 
+        # during an 'allOf' validation.
+        self.actual_disallow_unknown_properties = disallow_unknown_properties
+        self.skip_required_check = False
+        self.unknown_properties_check_stack = []
+        self.required_properties_check_stack = []
 
     def register_format_validator(self, format_name, format_validator_fun):
         self._format_validators[format_name] = format_validator_fun
@@ -141,6 +160,9 @@ class SchemaValidator(object):
 
     def validate_type_any(self, val):
         return True
+
+    def validate_type_uuid(self, val):
+        return isinstance(val, UUID)
 
     def _error(self, desc, value, fieldname, **params):
         params['value'] = value
@@ -208,6 +230,10 @@ class SchemaValidator(object):
                                       fieldtype)
 
                 if not type_checker(value):
+                    # Allow UUID objects to validate for 'uuid' format strings.
+                    if 'format' in schema and schema['format'] == 'uuid':
+                        if self.validate_type_uuid(value):
+                            return
                     self._error("Value %(value)r for field '%(fieldname)s' "
                                 "is not of type %(fieldtype)s",
                                 value, fieldname, fieldtype=fieldtype)
@@ -226,9 +252,16 @@ class SchemaValidator(object):
                         self._validate_unknown_properties(properties, value,
                                                           fieldname)
 
+                    self.unknown_properties_check_stack.append(self.disallow_unknown_properties)
+                    self.required_properties_check_stack.append(self.skip_required_check)
+                    self.disallow_unknown_properties = self.actual_disallow_unknown_properties
+                    debug("slamming unknown check to actual")
+                    self.skip_required_check = False
                     for eachProp in properties:
                         self.__validate(eachProp, value,
                                         properties.get(eachProp))
+                    self.disallow_unknown_properties = self.unknown_properties_check_stack.pop()
+                    self.skip_required_check = self.required_properties_check_stack.pop()
                 else:
                     raise SchemaError("Properties definition of field '%s' is "
                                       "not an object" % fieldname)
@@ -248,6 +281,11 @@ class SchemaValidator(object):
                                     "'%(fieldname)s' is not equal to length "
                                     "of schema list", value, fieldname)
                     else:
+                        self.unknown_properties_check_stack.append(self.disallow_unknown_properties)
+                        self.required_properties_check_stack.append(self.skip_required_check)
+                        self.disallow_unknown_properties = self.actual_disallow_unknown_properties
+                        debug("slamming unknown check to actual")
+                        self.skip_required_check = False
                         for itemIndex in range(len(items)):
                             try:
                                 self.validate(value[itemIndex],
@@ -257,6 +295,8 @@ class SchemaValidator(object):
                                               "list schema: %s" %
                                               (fieldname, e), fieldname,
                                               e.value)
+                        self.disallow_unknown_properties = self.unknown_properties_check_stack.pop()
+                        self.skip_required_check = self.required_properties_check_stack.pop()
                 elif isinstance(items, dict):
                     for eachItem in value:
                         if (self.disallow_unknown_properties and
@@ -264,8 +304,13 @@ class SchemaValidator(object):
                             self._validate_unknown_properties(
                                 items['properties'], eachItem, fieldname)
 
+                        self.unknown_properties_check_stack.append(self.disallow_unknown_properties)
+                        self.required_properties_check_stack.append(self.skip_required_check)
+                        self.disallow_unknown_properties = self.actual_disallow_unknown_properties
+                        debug("slamming unknown check to actual")
+                        self.skip_required_check = False
                         try:
-                            self._validate(eachItem, items)
+                            self._validate(eachItem, items, fieldname)
                         except FieldValidationError as e:
                             # a bit of a hack: replace reference to _data
                             # with 'list item' so error messages make sense
@@ -275,6 +320,8 @@ class SchemaValidator(object):
                                           "schema: %s" %
                                           (fieldname, old_error), fieldname,
                                           e.value)
+                        self.disallow_unknown_properties = self.unknown_properties_check_stack.pop()
+                        self.skip_required_check = self.required_properties_check_stack.pop()
                 else:
                     raise SchemaError("Properties definition of field '%s' is "
                                       "not a list or an object" % fieldname)
@@ -283,8 +330,22 @@ class SchemaValidator(object):
         '''
         Validates that the given field is present if required is True
         '''
+        # If required is a list, we need to match against
+        # the properties dict.
+        if self.skip_required_check:
+            return
+        if isinstance(required, list):
+            try:
+                props = x[fieldname]
+            except KeyError:
+                self._error("Required properties are missing: %(fieldname)s",
+                            None, required)
+            for prop in required:
+                if not isinstance(props, dict) or prop not in props:
+                    self._error("Required property missing for field '%(fieldname)s': %(prop)s",
+                            None, fieldname, prop=prop)
         # Make sure the field is present
-        if fieldname not in x and required:
+        elif required and fieldname not in x:
             self._error("Required field '%(fieldname)s' is missing",
                         None, fieldname)
 
@@ -307,7 +368,7 @@ class SchemaValidator(object):
 
         for pattern, schema in patternproperties.items():
             for key, value in value_obj.items():
-                if re.match(pattern, key):
+                if re.match(pattern, str(key)):
                     self.validate(value, schema)
 
     def validate_additionalItems(self, x, fieldname, schema,
@@ -327,7 +388,7 @@ class SchemaValidator(object):
 
         remaining = value[len(schema['items']):]
         if len(remaining) > 0:
-            self._validate(remaining, {'items': additionalItems})
+            self._validate(remaining, {'items': additionalItems}, fieldname)
 
     def validate_additionalProperties(self, x, fieldname, schema,
                                       additionalProperties=None):
@@ -347,14 +408,34 @@ class SchemaValidator(object):
             return
 
         value = x.get(fieldname)
+        debug("additionalProperties additionalProperties %s", additionalProperties)
+        debug("additionalProperties value %s", value)
         if isinstance(additionalProperties, (dict, bool)):
-            properties = schema.get("properties")
-            if properties is None:
-                properties = {}
-            if value is None:
-                value = {}
+            properties = schema.get("properties", {})
+            patternProperties = schema.get("patternProperties", {})
+            debug("additionalProperties properties %s", properties)
+            debug("additionalProperties patternProperties %s", patternProperties)
             for eachProperty in value:
+                debug("additionalProperties eachProperty %s", eachProperty)
                 if eachProperty not in properties:
+                    # Match against patternProperties
+                    matched_pattern = False
+                    for pattern, patternSchema in patternProperties.iteritems():
+                        try:
+                            regex = re.compile(pattern)
+                        except re.error as e:
+                            self._error("Invalid patternProperties regex (%(error)s) in field '%(fieldname)s': %(pattern)s",
+                                        None, fieldname, pattern=pattern, error=str(e))
+                            
+                        m = regex.match(str(eachProperty))
+                        if m:
+                            self.__validate(eachProperty, value, patternSchema)
+                            matched_pattern = True
+                            break
+
+                    if matched_pattern:
+                        continue
+                        
                     # If additionalProperties is the boolean value False
                     # then we don't accept any additional properties.
                     if (isinstance(additionalProperties, bool) and not
@@ -401,6 +482,10 @@ class SchemaValidator(object):
 
         exclusive = schema.get('exclusiveMinimum', False)
 
+        if type(minimum) not in (int, float):
+            self._error("Minimum value specification '%(value)s' %(type)s for field '%(fieldname)s' must be a float or integer.",
+            minimum, fieldname, type=str(type(minimum)))
+
         if x.get(fieldname) is not None:
             value = x.get(fieldname)
             if value is not None:
@@ -419,6 +504,10 @@ class SchemaValidator(object):
 
         exclusive = schema.get('exclusiveMaximum', False)
 
+        if type(maximum) not in (int, float):
+            self._error("Maximum value specification '%(value)s' %(type)s for field '%(fieldname)s' must be a float or integer.",
+            maximum, fieldname, type=str(type(maximum)))
+
         if x.get(fieldname) is not None:
             value = x.get(fieldname)
             if value is not None:
@@ -434,6 +523,11 @@ class SchemaValidator(object):
         Validates that the value of the given field is shorter than or equal
         to the specified length
         '''
+
+        if type(length) != int:
+            self._error("MaxLength specification '%(value)s' %(type)s for field '%(fieldname)s' must be an integer.",
+            length, fieldname, type=str(type(length)))
+
         value = x.get(fieldname)
         if isinstance(value, (_str_type, list, tuple)) and len(value) > length:
             self._error("Length of value %(value)r for field '%(fieldname)s' "
@@ -445,6 +539,11 @@ class SchemaValidator(object):
         Validates that the value of the given field is longer than or equal
         to the specified length
         '''
+
+        if type(length) != int:
+            self._error("MinLength specification '%(value)s' %(type)s for field '%(fieldname)s' must be an integer.",
+            length, fieldname, type=str(type(length)))
+
         value = x.get(fieldname)
         if isinstance(value, (_str_type, list, tuple)) and len(value) < length:
             self._error("Length of value %(value)r for field '%(fieldname)s' "
@@ -511,6 +610,93 @@ class SchemaValidator(object):
             else:
                 add(value)
 
+    def _collect_properties(self, fieldname, schema, schema_properties, required_properties):
+        '''
+        Collect next level of schema properties and required properties from schema.
+        This is used during 'allOf' validation since properties may be split into multiple
+        subschemas.
+        '''
+        debug("_collect_props fieldname %s", fieldname)
+        debug("_collect_props schema %s", schema)
+        if schema is not None:
+            if isinstance(schema, dict):
+                for schemaprop, prop_spec in schema.iteritems():
+                    if 'properties' == schemaprop:
+                        schema_properties |= set(prop_spec)
+                    elif 'required' == schemaprop:
+                        if isinstance(prop_spec, list):
+                            required_properties |= set(prop_spec)
+                        elif prop_spec:
+                            required_properties.add(fieldname)
+                    elif '$ref' == schemaprop and prop_spec in self.schemas:
+                        refSchema = self.schemas[prop_spec]
+                        if 'type' in refSchema and refSchema['type'] == 'inline':
+                            refSchema = refSchema['schema']
+                        self._collect_properties(fieldname, refSchema, schema_properties, required_properties)
+                    elif 'items' == schemaprop:
+                        self_collect_properties(fieldname, prop_spec, schema_properties, required_properties)
+                    elif 'allOf' == schemaprop and isinstance(prop_spec, list):
+                        for subschema in prop_spec:
+                            self._collect_properties(fieldname, subschema, schema_properties, required_properties)
+                    elif 'schema' == schemaprop:
+                        debug("collecting schema props %s %s", (fieldname,prop_spec))
+                        self._collect_properties(fieldname, prop_spec, schema_properties, required_properties)
+                        
+
+
+    def validate_allOf(self, x, fieldname, schema, subschemas):
+        debug("x %s", x)
+        debug("fieldname %s", fieldname)
+        debug("subschemas %s", subschemas)
+
+        data_properties = set(x[fieldname])
+        required_properties = set()
+        schema_properties = set()
+        # Collect all data, schema and required properties from subschemas.
+        for subschema in subschemas:
+            debug("validate_allOf fieldname %s", fieldname)
+            debug("validate_allOf subschema %s", subschema)
+            self._collect_properties(fieldname, subschema, schema_properties, required_properties)
+        debug("data %s", data_properties)
+        debug("required %s", required_properties)
+        debug("schema %s", schema_properties)
+
+        # Check for unknown or missing properties now.  We will skip checking
+        # for bad properties during each subschema check.
+        unknown_properties = data_properties - schema_properties
+        debug("unknown %s", unknown_properties)
+
+        if self.disallow_unknown_properties and unknown_properties:
+            unknowns = ', '.join(['"%s"' % x for x in unknown_properties])
+            raise SchemaError('Unknown properties for field '
+                              '"%(fieldname)s": %(unknowns)s' %
+                              locals())
+
+        missing_properties = required_properties - data_properties
+        debug("missing %s", missing_properties)
+
+        if missing_properties:
+            missing = ', '.join(['"%s"' % x for x in missing_properties])
+            raise SchemaError('Missing required properties for field '
+                              '"%(fieldname)s": %(missing)s' %
+                              locals())
+
+        #defaulted_properties = schema_properties - data_properties
+        #debug("defaulted %s", defaulted_properties)
+        
+        # Temporarily disable unknown/required checking.  This has already been done.
+        self.unknown_properties_check_stack.append(self.disallow_unknown_properties)
+        self.required_properties_check_stack.append(self.skip_required_check)
+        self.disallow_unknown_properties = False
+        self.skip_required_check = True
+        # Validate each subschema.
+        for subschema in subschemas:
+            debug("subschema %s",subschema)
+            self._validate(x[fieldname], subschema, fieldname)
+        # Restore previous unknown/required checking.
+        self.disallow_unknown_properties = self.unknown_properties_check_stack.pop()
+        self.skip_required_check = self.required_properties_check_stack.pop()
+
     def validate_enum(self, x, fieldname, schema, options=None):
         '''
         Validates that the value of the field is equal to one of the
@@ -563,14 +749,36 @@ class SchemaValidator(object):
                     "field '%(fieldname)s'",
                     x.get(fieldname), fieldname, disallow=disallow)
 
+    def validate_ref(self, x, fieldname, schema, ref):
+        '''
+        Dereference inline '$ref' schemas.
+        '''
+        if fieldname not in x:
+            return
+
+        if ref not in self.schemas:
+            self._error("Reference to unknown schema: %(fieldname)s",
+                        None, ref)
+
+        refSchema = self.schemas[ref]
+        debug("ref %s",ref)
+        debug("x %s",x)
+        debug("fieldname %s",fieldname)
+        if 'type' in refSchema and refSchema['type'] == 'inline':
+            debug("x %s",x)
+            debug("fieldname %s",fieldname)
+            debug("refSchema %s",refSchema)
+            refSchema = refSchema['schema']
+        self._validate(x[fieldname], refSchema, fieldname)
+
     def validate(self, data, schema):
         '''
         Validates a piece of json data against the provided json-schema.
         '''
         self._validate(data, schema)
 
-    def _validate(self, data, schema):
-        self.__validate("_data", {"_data": data}, schema)
+    def _validate(self, data, schema, fieldname="_data"):
+        self.__validate(fieldname, {fieldname: data}, schema)
 
     def __validate(self, fieldname, data, schema):
 
@@ -596,7 +804,7 @@ class SchemaValidator(object):
 
             for schemaprop in newschema:
 
-                validatorname = "validate_" + schemaprop
+                validatorname = "validate_" + schemaprop.replace('$','')
 
                 validator = getattr(self, validatorname, None)
                 if validator:

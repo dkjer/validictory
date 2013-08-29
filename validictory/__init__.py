@@ -5,12 +5,13 @@ from validictory.validator import (SchemaValidator, FieldValidationError,
 
 __all__ = ['validate', 'SchemaValidator', 'FieldValidationError',
            'ValidationError', 'SchemaError']
-__version__ = '0.9.1'
+__version__ = '0.9.2'
 
 
 def validate(data, schema, validator_cls=SchemaValidator,
              format_validators=None, required_by_default=True,
-             blank_by_default=False, disallow_unknown_properties=False):
+             blank_by_default=False, disallow_unknown_properties=False,
+             schemas={}):
     '''
     Validates a parsed json document against the provided schema. If an
     error is found a :class:`ValidationError` is raised.
@@ -18,6 +19,8 @@ def validate(data, schema, validator_cls=SchemaValidator,
     If there is an issue in the schema a :class:`SchemaError` will be raised.
 
     :param data:  python data to validate
+    :param schemas: python dictionary representing all available schemas for use
+        by '$ref' properties.
     :param schema: python dictionary representing the schema (see
         `schema format`_)
     :param validator_cls: optional validator class (default is
@@ -29,7 +32,7 @@ def validate(data, schema, validator_cls=SchemaValidator,
         disallow properties not listed in the schema definition
     '''
     v = validator_cls(format_validators, required_by_default, blank_by_default,
-                      disallow_unknown_properties)
+                      disallow_unknown_properties, schemas)
     return v.validate(data, schema)
 
 if __name__ == '__main__':
