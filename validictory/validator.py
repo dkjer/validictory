@@ -90,6 +90,13 @@ def validate_format_ip_address(validator, fieldname, value, format_option):
                                    "is not a ip-address" % locals(), fieldname,
                                    value)
 
+UUID_REGEX=re.compile('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+def validate_format_uuid(validator, fieldname, value, format_option):
+    is_uuid = isinstance(value, UUID) or (UUID_REGEX.match(str(value)) is not None)
+    if not is_uuid:
+        raise FieldValidationError("Value %(value)r of field '%(fieldname)s'"
+                                   "is not a uuid" % locals(), fieldname,
+                                   value)
 
 DEFAULT_FORMAT_VALIDATORS = {
     'date-time': validate_format_date_time,
@@ -97,6 +104,7 @@ DEFAULT_FORMAT_VALIDATORS = {
     'time': validate_format_time,
     'utc-millisec': validate_format_utc_millisec,
     'ip-address': validate_format_ip_address,
+    'uuid': validate_format_uuid,
 }
 
 
@@ -112,16 +120,19 @@ class SchemaValidator(object):
         schema attribute True by default.
     :param disallow_unknown_properties: defaults to False, set to True to
         disallow properties not listed in the schema definition
+    :param disallow_unknown_schemas: defaults to False, set to True to
+        disallow '$ref' references to schemas not in ``schemas``
     :param schemas: defaults to empty map.  Used for '$ref' lookups.
     '''
 
     def __init__(self, format_validators=None, required_by_default=True,
                  blank_by_default=False, disallow_unknown_properties=False,
-                 schemas={}):
+                 disallow_unknown_schemas=False, schemas={}):
         if format_validators is None:
             format_validators = DEFAULT_FORMAT_VALIDATORS.copy()
 
         self.schemas = schemas
+        self.disallow_unknown_schemas = disallow_unknown_schemas
         self._format_validators = format_validators
         self.required_by_default = required_by_default
         self.blank_by_default = blank_by_default
@@ -158,11 +169,11 @@ class SchemaValidator(object):
     def validate_type_null(self, val):
         return val is None
 
+    def validate_type_uuid(self, val):
+        return isinstance(val, UUID) or UUID_REGEX.match(str(val)) is not None
+
     def validate_type_any(self, val):
         return True
-
-    def validate_type_uuid(self, val):
-        return isinstance(val, UUID)
 
     def _error(self, desc, value, fieldname, **params):
         params['value'] = value
@@ -189,6 +200,7 @@ class SchemaValidator(object):
         data
         '''
 
+        debug("validate type %s %s %s %s",(x,fieldname,schema,fieldtype))
         # We need to know if the field exists or if it's just Null
         fieldexists = True
         try:
@@ -229,11 +241,11 @@ class SchemaValidator(object):
                     raise SchemaError("Field type '%s' is not supported." %
                                       fieldtype)
 
+                # Special case: format 'uuid' implies possible UUID() type.
+                if 'format' in schema and schema['format'] == 'uuid':
+                    type_checker = self.validate_type_uuid
+                    
                 if not type_checker(value):
-                    # Allow UUID objects to validate for 'uuid' format strings.
-                    if 'format' in schema and schema['format'] == 'uuid':
-                        if self.validate_type_uuid(value):
-                            return
                     self._error("Value %(value)r for field '%(fieldname)s' "
                                 "is not of type %(fieldtype)s",
                                 value, fieldname, fieldtype=fieldtype)
@@ -332,6 +344,7 @@ class SchemaValidator(object):
         '''
         # If required is a list, we need to match against
         # the properties dict.
+        debug("validate required %s %s %s %s", (x, fieldname, schema, required))
         if self.skip_required_check:
             return
         if isinstance(required, list):
@@ -365,6 +378,9 @@ class SchemaValidator(object):
             patternproperties = {}
 
         value_obj = x.get(fieldname, {})
+
+        if not isinstance(value_obj, dict):
+            return
 
         for pattern, schema in patternproperties.items():
             for key, value in value_obj.items():
@@ -557,11 +573,12 @@ class SchemaValidator(object):
         '''
         Validates the format of primitive data types
         '''
+        debug("validate_format %s %s %s",(x,fieldname,schema))
         value = x.get(fieldname)
 
         format_validator = self._format_validators.get(format_option, None)
 
-        if format_validator and value:
+        if format_validator and value is not None:
             format_validator(self, fieldname, value, format_option)
 
         # TODO: warn about unsupported format ?
@@ -753,12 +770,15 @@ class SchemaValidator(object):
         '''
         Dereference inline '$ref' schemas.
         '''
+        debug("validate_ref %s %s %s %s", (x, fieldname, schema, ref))
         if fieldname not in x:
             return
 
         if ref not in self.schemas:
-            self._error("Reference to unknown schema: %(fieldname)s",
-                        None, ref)
+            if self.disallow_unknown_schemas:
+                self._error("Reference to unknown schema: %(fieldname)s", None, ref)
+            else:
+                return
 
         refSchema = self.schemas[ref]
         debug("ref %s",ref)

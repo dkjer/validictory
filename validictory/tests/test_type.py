@@ -2,6 +2,7 @@ from unittest import TestCase
 from decimal import Decimal
 import datetime
 import sys
+from uuid import UUID
 
 if sys.version_info[0] == 3:
     unicode_str = '\u2603'
@@ -63,6 +64,11 @@ class TestType(TestCase):
         valids = [True, False]
         invalids = [1.2, "False", {"test": "blah"}, [32, 49], None, 1, 0]
         self._test_type('boolean', valids, invalids)
+
+    def test_uuid(self):
+        valids = [UUID('ec34a9b8-2368-47e2-b2a8-abfd02a7c658'), 'ee2952a5-3f1f-402b-9df7-354534a0400b']
+        invalids = ['ec34a9b8236847e2b2a8abfd02a7c658', 'ec34a9b8-2368-47e2-b2a8-abfd02a7', 0, 1.2, {"test":"blah"}, [32, 49], 123, False]
+        self._test_type('uuid', valids, invalids)
 
     def test_UserDict_is_object(self):
         # A UserDict (and similar classes) are not dicts, but they're dict-like

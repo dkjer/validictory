@@ -5,6 +5,7 @@
 from unittest import TestCase
 
 import validictory
+from uuid import UUID
 
 
 class TestEnum(TestCase):
@@ -71,6 +72,7 @@ class TestFormat(TestCase):
     schema_time = {"format": "time"}
     schema_utcmillisec = {"format": "utc-millisec"}
     schema_ip = {"format": "ip-address"}
+    schema_uuid = {"format": "uuid"}
     schema_spaces = {"format": "spaces"}
 
     def test_format_datetime_pass(self):
@@ -161,6 +163,20 @@ class TestFormat(TestCase):
         for ip in invalids:
             self.assertRaises(ValueError, validictory.validate, ip,
                               self.schema_ip)
+
+    def test_format_uuid_pass(self):
+        valids = [UUID('ec34a9b8-2368-47e2-b2a8-abfd02a7c658'), 'ee2952a5-3f1f-402b-9df7-354534a0400b']
+        for id in valids:
+            try:
+                validictory.validate(id, self.schema_uuid)
+            except ValueError as e:
+                self.fail("Unexpected failure: %s" % e)
+
+    def test_format_uuid_fail(self):
+        invalids = ['ec34a9b8236847e2b2a8abfd02a7c658', 'ec34a9b8-2368-47e2-b2a8-abfd02a7', 0, 1.2, {"test":"blah"}, [32, 49], 123, False]
+        for id in invalids:
+            self.assertRaises(ValueError, validictory.validate, id,
+                              self.schema_uuid)
 
     def test_format_required_false(self):
         schema = {
