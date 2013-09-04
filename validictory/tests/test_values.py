@@ -455,6 +455,11 @@ class TestMaxLength(TestCase):
         except ValueError as e:
             self.fail("Unexpected failure: %s" % e)
 
+        try:
+            validictory.validate('', {"type" : "string", "blank" : True, "maxLength": 0})
+        except ValueError as e:
+            self.fail("Unexpected failure: %s" % e)
+
     def test_maxLength_pass_nonstring(self):
         # test when data is not a string
         data1 = 12345
