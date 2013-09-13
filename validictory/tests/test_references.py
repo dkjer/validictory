@@ -72,14 +72,28 @@ class TestReferences(TestCase):
 
     schema_allOfoneOf = {
         "type" : "object",
-        "allOf" : [ {
-            "type" : "object",
-            "oneOf" : [
-                { "type" : "object", "properties" : { "prop7" : { "type" : "boolean" } } },
-                { "type" : "object", "properties" : { "prop8" : { "type" : "integer" } } },
-            ]
-        }, { "type" : "object", "properties" : { "prop9" : { "type" : "string" } } }
-        ]
+        "required" : [ "prop10" ],
+        "properties" : {
+            "prop10" : {
+                "type" : "object",
+                "allOf" : [ {
+                    "type" : "object",
+                    "oneOf" : [ {
+                        "type" : "object",
+                        "properties" : {
+                            "prop7" : { "type" : "boolean" }
+                        }
+                    }, {
+                        "type" : "object",
+                        "properties" : {
+                            "prop8" : { "type" : "integer" }
+                        }
+                    },
+                    ]
+                }, { "type" : "object", "properties" : { "prop9" : { "type" : "string" } } }
+                ]
+            }
+        }
     }
 
     schema_refAllOfoneOf = {
@@ -124,6 +138,7 @@ class TestReferences(TestCase):
     def _validate(self, *args, **kwargs):
         kwargs['schemas'] = kwargs.get('schemas', self.schemas)
         kwargs['disallow_unknown_schemas'] = kwargs.get('disallow_unknown_schemas', True)
+        kwargs['disallow_unknown_properties'] = kwargs.get('disallow_unknown_properties', True)
         return validate(*args, **kwargs)
 
     def test_references1(self):
@@ -293,15 +308,10 @@ class TestReferences(TestCase):
             "prop6" : True,
         }
 
-        valid3 = {
-            "prop3" : True,
-            "prop6" : True,
-        }
 
         try:
             self._validate(valid1, self.schema_oneOf)
             self._validate(valid2, self.schema_oneOf)
-            self._validate(valid3, self.schema_oneOf)
         except ValidationError as e:
             self.fail("Unexpected failure: %s" % e)
 
@@ -323,20 +333,30 @@ class TestReferences(TestCase):
             "test" : "fail",
         }
 
+        invalid5 = {
+            "prop3" : True,
+            "prop6" : True,
+        }
+
         self.assertRaises(ValidationError, self._validate, invalid1, self.schema_oneOf)
         self.assertRaises(ValidationError, self._validate, invalid2, self.schema_oneOf)
         self.assertRaises(ValidationError, self._validate, invalid3, self.schema_oneOf)
         self.assertRaises(ValidationError, self._validate, invalid4, self.schema_oneOf)
+        self.assertRaises(ValidationError, self._validate, invalid5, self.schema_oneOf)
 
     def test_allOfoneOf(self):
         valid1 = {
-            "prop9" : "test",
-            "prop7" : True,
+            "prop10" : {
+                "prop9" : "test",
+                "prop7" : True,
+            }
         }
 
         valid2 = {
-            "prop9" : "test",
-            "prop8" : 42,
+            "prop10" : {
+                "prop9" : "test",
+                "prop8" : 42,
+            }
         }
 
         try:
@@ -348,25 +368,47 @@ class TestReferences(TestCase):
             self.fail("Unexpected failure: %s" % e)
 
         invalid1 = {
-            "prop9" : "test",
-            "prop7" : True,
-            "prop8" : 42,
+            "prop10" : {
+                "prop9" : "test",
+                "prop7" : True,
+                "prop8" : 42,
+            }
         }
 
         invalid2 = {
-            "prop9" : "test",
+            "prop10" : {
+                "prop9" : "test",
+            }
         }
 
         invalid3 = {
-            "prop7" : True,
+            "prop10" : {
+                "prop7" : True,
+            }
         }
 
         invalid4 = {
-            "prop8" : 42,
+            "prop10" : {
+                "prop8" : 42,
+            }
         }
 
         invalid5 = {
+            "prop10" : {
+                "test" : "fail",
+            }
+        }
+
+        invalid6 = {
             "test" : "fail",
+        }
+
+        invalid7 = {
+            "prop10" : {
+                "prop9" : "test",
+                "prop7" : True,
+                "unknown" : 1,
+            }
         }
 
         self.assertRaises(ValidationError, self._validate, invalid1, self.schema_allOfoneOf)
@@ -374,11 +416,15 @@ class TestReferences(TestCase):
         self.assertRaises(ValidationError, self._validate, invalid3, self.schema_allOfoneOf)
         self.assertRaises(ValidationError, self._validate, invalid4, self.schema_allOfoneOf)
         self.assertRaises(ValidationError, self._validate, invalid5, self.schema_allOfoneOf)
+        self.assertRaises(ValidationError, self._validate, invalid6, self.schema_allOfoneOf)
+        self.assertRaises(ValidationError, self._validate, invalid7, self.schema_allOfoneOf)
         self.assertRaises(ValidationError, self._validate, invalid1, self.schema_refAllOfoneOf)
         self.assertRaises(ValidationError, self._validate, invalid2, self.schema_refAllOfoneOf)
         self.assertRaises(ValidationError, self._validate, invalid3, self.schema_refAllOfoneOf)
         self.assertRaises(ValidationError, self._validate, invalid4, self.schema_refAllOfoneOf)
         self.assertRaises(ValidationError, self._validate, invalid5, self.schema_refAllOfoneOf)
+        self.assertRaises(ValidationError, self._validate, invalid6, self.schema_refAllOfoneOf)
+        self.assertRaises(ValidationError, self._validate, invalid7, self.schema_refAllOfoneOf)
 
     def test_anyOf(self):
         valid1 = {
@@ -390,30 +436,31 @@ class TestReferences(TestCase):
             "prop3" : True,
         }
 
-        valid3 = {
+        try:
+            self._validate(valid1, self.schema_anyOf)
+            self._validate(valid2, self.schema_anyOf)
+        except ValidationError as e:
+            self.fail("Unexpected failure: %s" % e)
+
+        invalid1 = {
+            "test" : "fail",
+        }
+
+        invalid2 = {
             "prop6" : True,
             "prop2" : 42,
             "prop3" : True,
         }
 
-        valid4 = {
+        invalid3 = {
             "prop6" : True,
             "prop3" : True,
         }
 
-        try:
-            self._validate(valid1, self.schema_anyOf)
-            self._validate(valid2, self.schema_anyOf)
-            self._validate(valid3, self.schema_anyOf)
-            self._validate(valid4, self.schema_anyOf)
-        except ValidationError as e:
-            self.fail("Unexpected failure: %s" % e)
 
-        invalid = {
-            "test" : "fail",
-        }
-
-        self.assertRaises(ValidationError, self._validate, invalid, self.schema_anyOf)
+        self.assertRaises(ValidationError, self._validate, invalid1, self.schema_anyOf)
+        self.assertRaises(ValidationError, self._validate, invalid2, self.schema_anyOf)
+        self.assertRaises(ValidationError, self._validate, invalid3, self.schema_anyOf)
 
     def test_not(self):
         valid1 = {

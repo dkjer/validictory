@@ -7,7 +7,7 @@ from decimal import Decimal
 from collections import Mapping, Container
 from uuid import UUID
 
-DEBUG=False
+DEBUG=True
 
 def debug(mesg, params=None):
     if DEBUG:
