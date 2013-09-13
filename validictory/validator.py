@@ -28,6 +28,9 @@ class SchemaError(ValueError):
     """
     errors encountered in processing a schema (subclass of :class:`ValueError`)
     """
+    def __init__(self, *args, **kwargs):
+        debug("SchemaError: %s %s", (args, kwargs))
+        super(SchemaError, self).__init__(*args, **kwargs)
 
 
 class ValidationError(ValueError):
@@ -35,6 +38,9 @@ class ValidationError(ValueError):
     validation errors encountered during validation (subclass of
     :class:`ValueError`)
     """
+    def __init__(self, *args, **kwargs):
+        debug("ValidationError: %s %s", (args, kwargs))
+        super(ValidationError, self).__init__(*args, **kwargs)
 
 
 class FieldValidationError(ValidationError):
@@ -190,7 +196,7 @@ class SchemaValidator(object):
             for x in delta:
                 unknowns += '"%s", ' % x
             unknowns = unknowns.rstrip(", ")
-            raise SchemaError('Unknown properties for field '
+            raise ValidationError('Unknown properties for field '
                               '"%(fieldname)s": %(unknowns)s' %
                               locals())
 
@@ -685,7 +691,7 @@ class SchemaValidator(object):
 
         if self.disallow_unknown_properties and unknown_properties:
             unknowns = ', '.join(['"%s"' % x for x in unknown_properties])
-            raise SchemaError('Unknown properties for field '
+            raise ValidationError('Unknown properties for field '
                               '"%(fieldname)s": %(unknowns)s' %
                               locals())
 
@@ -694,7 +700,7 @@ class SchemaValidator(object):
 
         if missing_properties:
             missing = ', '.join(['"%s"' % x for x in missing_properties])
-            raise SchemaError('Missing required properties for field '
+            raise ValidationError('Missing required properties for field '
                               '"%(fieldname)s": %(missing)s' %
                               locals())
 
@@ -713,6 +719,48 @@ class SchemaValidator(object):
         # Restore previous unknown/required checking.
         self.disallow_unknown_properties = self.unknown_properties_check_stack.pop()
         self.skip_required_check = self.required_properties_check_stack.pop()
+
+    def validate_oneOf(self, x, fieldname, schema, subschemas):
+        matches = self._get_matches_count(x, fieldname, schema, subschemas)
+        if matches == 0:
+            self._error("Value %(value)r for field '%(fieldname)s' "
+                        "does not match any subschemas.",
+                        x[fieldname], fieldname)
+        if matches > 1:
+            self._error("Value %(value)r for field '%(fieldname)s' "
+                        "matches more than 1 subschema; matches = %(matches)d",
+                        x[fieldname], fieldname, matches=matches)
+
+    def validate_anyOf(self, x, fieldname, schema, subschemas):
+        matches = self._get_matches_count(x, fieldname, schema, subschemas)
+        if matches == 0:
+            self._error("Value %(value)r for field '%(fieldname)s' "
+                        "does not match any subschemas.",
+                        x[fieldname], fieldname)
+
+    def validate_not(self, x, fieldname, schema, subschema):
+        matches = self._get_matches_count(x, fieldname, schema, [subschema])
+        if matches != 0:
+            self._error("Value %(value)r for field '%(fieldname)s' "
+                        "matches subschema.",
+                        x[fieldname], fieldname)
+
+    def _get_matches_count(self, x, fieldname, schema, subschemas):
+        debug("x %s", x)
+        debug("fieldname %s", fieldname)
+        debug("subschemas %s", subschemas)
+
+        # Validate each subschema.  Count matches.
+        matches = 0
+        for subschema in subschemas:
+            debug("validate_anyOf fieldname %s", fieldname)
+            debug("validate_anyOf subschema %s", subschema)
+            try:
+                self._validate(x[fieldname], subschema, fieldname)
+                matches += 1
+            except ValidationError:
+                pass
+        return matches
 
     def validate_enum(self, x, fieldname, schema, options=None):
         '''

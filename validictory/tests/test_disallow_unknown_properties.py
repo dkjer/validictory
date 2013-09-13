@@ -57,7 +57,7 @@ class TestDisallowUnknownProperties(TestCase):
 
     def test_disallow_unknown_properties_fail(self):
         self.data_simple["sex"] = "male"
-        self.assertRaises(validictory.SchemaError, validictory.validate,
+        self.assertRaises(validictory.ValidationError, validictory.validate,
                           self.data_simple, self.schema_simple,
                           disallow_unknown_properties=True)
 
@@ -72,6 +72,6 @@ class TestDisallowUnknownProperties(TestCase):
         newrow = {"sku": "789", "desc": "catch me if you can", "price": 1,
                   "rice": 666}
         self.data_complex["rows"].append(newrow)
-        self.assertRaises(validictory.SchemaError, validictory.validate,
+        self.assertRaises(validictory.ValidationError, validictory.validate,
                           self.data_complex, self.schema_complex,
                           disallow_unknown_properties=True)
