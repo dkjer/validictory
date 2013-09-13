@@ -70,6 +70,23 @@ class TestReferences(TestCase):
         ]
     }
 
+    schema_allOfoneOf = {
+        "type" : "object",
+        "allOf" : [ {
+            "type" : "object",
+            "oneOf" : [
+                { "type" : "object", "properties" : { "prop7" : { "type" : "boolean" } } },
+                { "type" : "object", "properties" : { "prop8" : { "type" : "integer" } } },
+            ]
+        }, { "type" : "object", "properties" : { "prop9" : { "type" : "string" } } }
+        ]
+    }
+
+    schema_refAllOfoneOf = {
+        "type" : "object",
+        "$ref" : "schema_allOfoneOf",
+    }
+
     schema_anyOf = {
         "type" : "object",
         "anyOf" : [
@@ -96,6 +113,7 @@ class TestReferences(TestCase):
         'schema_allOf' : schema_allOf,
         'schema_oneOf' : schema_oneOf,
         'schema_anyOf' : schema_anyOf,
+        'schema_allOfoneOf' : schema_allOfoneOf,
         'schema_not' : schema_not,
     }
 
@@ -309,6 +327,58 @@ class TestReferences(TestCase):
         self.assertRaises(ValidationError, self._validate, invalid2, self.schema_oneOf)
         self.assertRaises(ValidationError, self._validate, invalid3, self.schema_oneOf)
         self.assertRaises(ValidationError, self._validate, invalid4, self.schema_oneOf)
+
+    def test_allOfoneOf(self):
+        valid1 = {
+            "prop9" : "test",
+            "prop7" : True,
+        }
+
+        valid2 = {
+            "prop9" : "test",
+            "prop8" : 42,
+        }
+
+        try:
+            self._validate(valid1, self.schema_allOfoneOf)
+            self._validate(valid2, self.schema_allOfoneOf)
+            self._validate(valid1, self.schema_refAllOfoneOf)
+            self._validate(valid2, self.schema_refAllOfoneOf)
+        except ValidationError as e:
+            self.fail("Unexpected failure: %s" % e)
+
+        invalid1 = {
+            "prop9" : "test",
+            "prop7" : True,
+            "prop8" : 42,
+        }
+
+        invalid2 = {
+            "prop9" : "test",
+        }
+
+        invalid3 = {
+            "prop7" : True,
+        }
+
+        invalid4 = {
+            "prop8" : 42,
+        }
+
+        invalid5 = {
+            "test" : "fail",
+        }
+
+        self.assertRaises(ValidationError, self._validate, invalid1, self.schema_allOfoneOf)
+        self.assertRaises(ValidationError, self._validate, invalid2, self.schema_allOfoneOf)
+        self.assertRaises(ValidationError, self._validate, invalid3, self.schema_allOfoneOf)
+        self.assertRaises(ValidationError, self._validate, invalid4, self.schema_allOfoneOf)
+        self.assertRaises(ValidationError, self._validate, invalid5, self.schema_allOfoneOf)
+        self.assertRaises(ValidationError, self._validate, invalid1, self.schema_refAllOfoneOf)
+        self.assertRaises(ValidationError, self._validate, invalid2, self.schema_refAllOfoneOf)
+        self.assertRaises(ValidationError, self._validate, invalid3, self.schema_refAllOfoneOf)
+        self.assertRaises(ValidationError, self._validate, invalid4, self.schema_refAllOfoneOf)
+        self.assertRaises(ValidationError, self._validate, invalid5, self.schema_refAllOfoneOf)
 
     def test_anyOf(self):
         valid1 = {
