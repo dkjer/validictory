@@ -200,12 +200,9 @@ class TestReferences(TestCase):
             "prop3" : True
         }
 
-        try:
-            self._validate(prop2, self.schema6)
-            self._validate(prop23, self.schema7)
-            self._validate(prop123, self.schema8)
-        except ValidationError as e:
-            self.fail("Unexpected failure: %s" % e)
+        self._validate(prop2, self.schema6)
+        self._validate(prop23, self.schema7)
+        self._validate(prop123, self.schema8)
 
         self.assertRaises(ValidationError, self._validate, prop2, self.schema7)
         self.assertRaises(ValidationError, self._validate, prop3, self.schema7)
@@ -447,13 +444,10 @@ class TestReferences(TestCase):
         }
 
         invalid2 = {
-            "prop6" : True,
             "prop2" : 42,
-            "prop3" : True,
         }
 
         invalid3 = {
-            "prop6" : True,
             "prop3" : True,
         }
 
