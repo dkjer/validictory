@@ -57,8 +57,8 @@ class TestItems(TestCase):
         try:
             validictory.validate(data, self.schema1)
         except ValueError as e:
-            # warning should mention list item, not _data
-            assert 'list item' in str(e)
+            # warning should mention index value
+            assert '_data_0' in str(e)
 
 
 class TestAdditionalItems(TestCase):

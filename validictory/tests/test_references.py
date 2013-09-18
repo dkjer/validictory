@@ -114,6 +114,81 @@ class TestReferences(TestCase):
         "not" : {"$ref" : "schema7"},
     }
 
+    schema_simpleNotRequired = {
+        "type" : "object",
+        "properties" : {
+            "outer" : { "type" : "string" }
+        }
+    }
+
+    schema_simpleRequired = {
+        "type" : "object",
+        "required" : [ "outer" ],
+        "properties" : {
+            "outer" : { "type" : "string" }
+        }
+    }
+
+    schema_nestedRequired = {
+        "type" : "object",
+        "required" : [ "outer" ],
+        "properties" : {
+            "outer" : { 
+                "type" : "object",
+                "properties" : {
+                    "inner" : { "type" : "string" }
+                }
+            }
+        }
+    }
+
+    schema_nestedNotRequired = {
+        "type" : "object",
+        "properties" : {
+            "outer" : { 
+                "type" : "object",
+                "required" : [ "inner" ],
+                "properties" : {
+                    "inner" : { "type" : "string" }
+                }
+            }
+        }
+    }
+
+    schema_patternRefRequired = {
+        "type" : "object",
+        "required" : [ "prop1" ],
+        "properties" : {
+            "prop1" : {"type": "string"},
+        },
+    }
+
+
+
+    schema_patternAllOfNestedRequired = {
+        "type" : "object",
+        "patternProperties": {
+            "^[a-z]{4}$" : {
+                "type" : "object",
+                "allOf" : [{
+                    "$ref" : "schema_patternRefRequired"
+                }, {
+                    "type" : "object",
+                    "properties" : {
+                        "outer" : {
+                            "type" : "object",
+                            "required" : [ "inner" ],
+                            "properties" : {
+                                "inner" : { "type" : "string" },
+                            }
+                        }
+                    }
+                }]
+            }
+        },
+        "additionalProperties" : False,
+    }
+
     schemas = {
         'schema1' : schema1,
         'schema2' : schema2,
@@ -129,6 +204,7 @@ class TestReferences(TestCase):
         'schema_anyOf' : schema_anyOf,
         'schema_allOfoneOf' : schema_allOfoneOf,
         'schema_not' : schema_not,
+        'schema_patternRefRequired' : schema_patternRefRequired,
     }
 
     dangling_schema = {
@@ -139,6 +215,7 @@ class TestReferences(TestCase):
         kwargs['schemas'] = kwargs.get('schemas', self.schemas)
         kwargs['disallow_unknown_schemas'] = kwargs.get('disallow_unknown_schemas', True)
         kwargs['disallow_unknown_properties'] = kwargs.get('disallow_unknown_properties', True)
+        kwargs['required_by_default'] = kwargs.get('required_by_default', True)
         return validate(*args, **kwargs)
 
     def test_references1(self):
@@ -488,6 +565,86 @@ class TestReferences(TestCase):
         }
 
         self.assertRaises(ValidationError, self._validate, invalid, self.schema_not)
+
+    def test_simpleRequired(self):
+        valid1 = {}
+        valid2 = {
+            "outer" : "test"
+        }
+        self._validate(valid2, self.schema_simpleRequired, required_by_default=False)
+        self._validate(valid1, self.schema_simpleNotRequired, required_by_default=False)
+        self._validate(valid2, self.schema_simpleNotRequired, required_by_default=False)
+
+        invalid = {
+            "bad" : "test"
+        }
+        self.assertRaises(ValidationError, self._validate, invalid, self.schema_simpleNotRequired, required_by_default=False)
+        self.assertRaises(ValidationError, self._validate, invalid, self.schema_simpleNotRequired, required_by_default=False)
+        self.assertRaises(ValidationError, self._validate, valid1, self.schema_simpleRequired, required_by_default=False)
+
+    def test_nestedRequired(self):
+        valid1 = {}
+        valid2 = {
+            "outer" : {
+                "inner" : "test"
+            }
+        }
+        self._validate(valid1, self.schema_nestedNotRequired, required_by_default=False)
+        self._validate(valid2, self.schema_nestedNotRequired, required_by_default=False)
+        self._validate(valid2, self.schema_nestedRequired, required_by_default=False)
+
+        invalid1 = {
+            "outer" : {}
+        }
+        invalid2 = {
+            "outer" : {
+                "inner" : 1234
+            }
+        }
+        self.assertRaises(ValidationError, self._validate, invalid2, self.schema_nestedRequired, required_by_default=False)
+        self.assertRaises(ValidationError, self._validate, valid1, self.schema_nestedRequired, required_by_default=False)
+        self.assertRaises(ValidationError, self._validate, invalid1, self.schema_nestedNotRequired, required_by_default=False)
+        self.assertRaises(ValidationError, self._validate, invalid2, self.schema_nestedNotRequired, required_by_default=False)
+
+    def test_patternAllOfNestedRequired(self):
+        valid_refRequired = {
+            "prop1" : "test"
+        }
+        valid1 = {
+            "abcd" : valid_refRequired
+        }
+        valid2 = valid1.copy()
+        valid2["abcd"]["outer"] = {
+            "inner" : "test"
+        }
+        self._validate(valid1, self.schema_patternAllOfNestedRequired, required_by_default=False)
+        self._validate(valid2, self.schema_patternAllOfNestedRequired, required_by_default=False)
+
+        invalid1 = {
+            "abcd" : {
+                "outer" : {
+                    "inner" : "test"
+                }
+            }
+        }
+
+        invalid2 = {
+            "abc" : valid_refRequired
+        }
+
+        invalid3 = valid1.copy()
+        invalid3["abcd"]["outer"] = {
+            "inner" : {}
+        }
+
+        invalid4 = valid1.copy()
+        invalid4["abcd"]["outer"] = {
+            "inner" : 123
+        }
+        self.assertRaises(ValidationError, self._validate, invalid1, self.schema_patternAllOfNestedRequired, required_by_default=False)
+        self.assertRaises(ValidationError, self._validate, invalid2, self.schema_patternAllOfNestedRequired, required_by_default=False)
+        self.assertRaises(ValidationError, self._validate, invalid3, self.schema_patternAllOfNestedRequired, required_by_default=False)
+        self.assertRaises(ValidationError, self._validate, invalid4, self.schema_patternAllOfNestedRequired, required_by_default=False)
         
     def test_references10(self):
         data = "test"

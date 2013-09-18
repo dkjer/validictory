@@ -190,7 +190,7 @@ class SchemaValidator(object):
             for x in delta:
                 unknowns += '"%s", ' % x
             unknowns = unknowns.rstrip(", ")
-            raise ValidationError('Unknown properties for field '
+            raise ValidationError('Unknown properties (A) for field '
                               '"%(fieldname)s": %(unknowns)s' %
                               locals())
 
@@ -229,10 +229,7 @@ class SchemaValidator(object):
                                 value, fieldname, numsubtypes=len(fieldtype),
                                 fieldtype=fieldtype, errorlist=errorlist)
             elif isinstance(fieldtype, dict):
-                try:
-                    self.__validate(fieldname, x, fieldtype)
-                except ValueError as e:
-                    raise e
+                self.__validate(fieldname, x, fieldtype)
             else:
                 try:
                     type_checker = getattr(self, 'validate_type_%s' %
@@ -255,6 +252,7 @@ class SchemaValidator(object):
         Validates properties of a JSON object by processing the object's
         schema recursively
         '''
+        debug("validate_properties %s ** %s ** %s ** %s ** %s", (x, fieldname, schema, properties, unknown_fields))
         if x.get(fieldname) is not None:
             value = x.get(fieldname)
             if isinstance(value, dict):
@@ -265,11 +263,14 @@ class SchemaValidator(object):
 
                     for eachProp in properties:
                         # Validate properties with a cleared 'unknown_fields'.
-                        self.__validate(eachProp, value,
-                            properties.get(eachProp), unknown_fields=None)
+                        debug("validate_properties eachProp, %s ** %s ** %s ** %s ** %s", (x, fieldname, eachProp, properties.get(eachProp), value))
+                        self.__validate(eachProp, value, properties.get(eachProp), unknown_fields=None)
                         # Remove this property from the unknown fields set.
                         if unknown_fields is not None and eachProp in unknown_fields:
                             unknown_fields.remove(eachProp)
+                            debug("removing %s from unknown_fields (A).  remaining: %s", (eachProp, unknown_fields))
+                        else:
+                            debug("skipping removal of %s from unknown_fields (A): %s", (eachProp, str(unknown_fields)))
                 else:
                     raise SchemaError("Properties definition of field '%s' is "
                                       "not an object" % fieldname)
@@ -299,22 +300,20 @@ class SchemaValidator(object):
                                               (fieldname, e), fieldname,
                                               e.value)
                 elif isinstance(items, dict):
-                    for eachItem in value:
+                    for itemIdx in range(len(value)):
+                        eachItem = value[itemIdx]
+                        itemField = "%s_%d" % (fieldname, itemIdx)
                         if (self.disallow_unknown_properties and
                                 'properties' in items):
                             self._validate_unknown_properties(
-                                items['properties'], eachItem, fieldname)
+                                items['properties'], eachItem, itemField)
 
                         try:
-                            self._validate(eachItem, items, fieldname)
+                            self._validate(eachItem, items, itemField)
                         except FieldValidationError as e:
-                            # a bit of a hack: replace reference to _data
-                            # with 'list item' so error messages make sense
-                            old_error = str(e).replace("field '_data'",
-                                                       'list item')
                             raise type(e)("Failed to validate field '%s' list "
                                           "schema: %s" %
-                                          (fieldname, old_error), fieldname,
+                                          (fieldname, str(e)), fieldname,
                                           e.value)
                 else:
                     raise SchemaError("Properties definition of field '%s' is "
@@ -326,13 +325,16 @@ class SchemaValidator(object):
         '''
         # If required is a list, we need to match against
         # the properties dict.
-        debug("validate required %s %s %s %s", (x, fieldname, schema, required))
+        debug("validate required %s ** %s ** %s ** %s", (x, fieldname, schema, required))
         if isinstance(required, list):
             try:
                 props = x[fieldname]
             except KeyError:
-                self._error("Required properties are missing: %(fieldname)s",
-                            None, required)
+                # required (as a list) is referring to and child properties of x[fieldname].
+                # it does not specify that x[fieldname] itself exists. (this could
+                # be specified at the parent level).
+                debug("skipping validation of missing field %s" % fieldname)
+                return
             for prop in required:
                 if not isinstance(props, dict) or prop not in props:
                     self._error("Required property missing for field '%(fieldname)s': %(prop)s",
@@ -365,9 +367,12 @@ class SchemaValidator(object):
         for pattern, schema in patternproperties.items():
             for key, value in value_obj.items():
                 if re.match(pattern, str(key)):
-                    self.validate(value, schema)
+                    self._validate(value, schema, key)
                     if unknown_fields is not None and str(key) in unknown_fields:
                         unknown_fields.remove(str(key))
+                        debug("removing %s from unknown_fields (B).  remaining: %s", (str(key), unknown_fields))
+                    else:
+                        debug("skipping removal of %s from unknown_fields (B): %s", (str(key), str(unknown_fields)))
 
     def validate_additionalItems(self, x, fieldname, schema,
                                  additionalItems=False, unknown_fields=None):
@@ -610,83 +615,106 @@ class SchemaValidator(object):
                 add(value)
 
     def validate_allOf(self, x, fieldname, schema, subschemas, unknown_fields=None):
-        matches, errorlist, remaining_fields, matched_fields = self._get_matches_count(x, fieldname, schema, subschemas)
-        if matches == 0:
+        matched, not_matched, errorlist, remaining_fields, matched_fields = self._get_matches(x, fieldname, schema, subschemas)
+        if len(matched) == 0:
+            for subschema in not_matched:
+                debug("validate_allOf did not match subschema. fieldname: %s, value: %s, subschema: %s", (fieldname, x[fieldname], subschema))
+
             self._error("Value %(value)r for field '%(fieldname)s' "
                         "does not match any subschemas; errorlist = %(errorlist)r",
                         x[fieldname], fieldname, errorlist=errorlist)
-        if matches != len(subschemas):
+        if len(matched) != len(subschemas):
+            for subschema in not_matched:
+                debug("validate_allOf did not match subschema. fieldname: %s, value: %s, subschema: %s", (fieldname, x[fieldname], subschema))
             self._error("Value %(value)r for field '%(fieldname)s' "
                         "only matches %(matches)d out of %(num_schemas)d subschemas; "
                         "errorlist = %(errorlist)r",
-                        x[fieldname], fieldname, matches=matches, num_schemas=len(subschemas),
+                        x[fieldname], fieldname, matches=len(matched), num_schemas=len(subschemas),
                         errorlist=errorlist)
-
         if unknown_fields is None:
             if len(remaining_fields) and self.disallow_unknown_properties:
-                unknowns = ", ".join([str(x) for x in remaining_fields])
-                raise ValidationError('Unknown properties for field '
+                for subschema in matched:
+                    debug("validate_allOf matched subschema. fieldname: %s, value: %s, subschema: %s", (fieldname, x[fieldname], subschema))
+                unknowns = ", ".join([str(field) for field in remaining_fields])
+                raise ValidationError('Unknown properties (B) for field '
                                   '"%(fieldname)s": %(unknowns)s' % locals())
         else:
             unknown_fields -= matched_fields
+            debug("validate_allOf: removing matched fields (%s) from unknown_fields.  remaining: %s", (matched_fields, unknown_fields)) 
+
 
     def validate_oneOf(self, x, fieldname, schema, subschemas, unknown_fields=None):
-        matches, errorlist, remaining_fields, matched_fields = self._get_matches_count(x, fieldname, schema, subschemas)
-        if matches == 0:
+        matched, not_matched, errorlist, remaining_fields, matched_fields = self._get_matches(x, fieldname, schema, subschemas)
+        if len(matched) == 0:
+            for subschema in not_matched:
+                debug("validate_oneOf did not match subschema. fieldname: %s, value: %s, subschema: %s", (fieldname, x[fieldname], subschema))
             self._error("Value %(value)r for field '%(fieldname)s' "
                         "does not match any subschemas; errorlist = %(errorlist)r",
                         x[fieldname], fieldname, errorlist=errorlist)
-        if matches > 1:
+        if len(matched) > 1:
+            for subschema in matched:
+                debug("validate_oneOf matched subschema. fieldname: %s, value: %s, subschema: %s", (fieldname, x[fieldname], subschema))
             self._error("Value %(value)r for field '%(fieldname)s' "
                         "matches more than 1 subschema; matches = %(matches)d",
-                        x[fieldname], fieldname, matches=matches)
+                        x[fieldname], fieldname, matches=len(matched))
 
         if unknown_fields is None:
             if len(remaining_fields) and self.disallow_unknown_properties:
                 unknowns = ", ".join([str(x) for x in remaining_fields])
-                raise ValidationError('Unknown properties for field '
+                raise ValidationError('Unknown properties (C) for field '
                                   '"%(fieldname)s": %(unknowns)s' % locals())
         else:
             unknown_fields -= matched_fields
+            debug("validate_oneOf: removing matched fields (%s) from unknown_fields.  remaining: %s", (matched_fields, unknown_fields)) 
 
     def validate_anyOf(self, x, fieldname, schema, subschemas, unknown_fields=None):
-        matches, errorlist, remaining_fields, matched_fields = self._get_matches_count(x, fieldname, schema, subschemas)
-        if matches == 0:
+        matched, not_matched, errorlist, remaining_fields, matched_fields = self._get_matches(x, fieldname, schema, subschemas)
+        if len(matched) == 0:
+            for subschema in not_matched:
+                debug("validate_anyOf did not match subschema. fieldname: %s, value: %s, subschema: %s", (fieldname, x[fieldname], subschema))
             self._error("Value %(value)r for field '%(fieldname)s' "
                         "does not match any subschemas; errorlist = %(errorlist)r",
                         x[fieldname], fieldname, errorlist=errorlist)
 
         if unknown_fields is not None:
             unknown_fields -= matched_fields
+            debug("validate_anyOf: removing matched fields (%s) from unknown_fields.  remaining: %s", (matched_fields, unknown_fields)) 
 
     def validate_not(self, x, fieldname, schema, subschema, unknown_fields=None):
-        matches, errorlist, remaining_fields, matched_fields = self._get_matches_count(x, fieldname, schema, [subschema])
-        if matches != 0:
+        matched, not_matched, errorlist, remaining_fields, matched_fields = self._get_matches(x, fieldname, schema, [subschema])
+        if len(matched) != 0:
+            for subschema in matched:
+                debug("validate_not matched subschema. fieldname: %s, value: %s, subschema: %s", (fieldname, x[fieldname], subschema))
             self._error("Value %(value)r for field '%(fieldname)s' "
                         "matches subschema.",
                         x[fieldname], fieldname)
 
         if unknown_fields is not None:
             unknown_fields -= matched_fields
+            debug("validate_not: removing matched fields (%s) from unknown_fields.  remaining: %s", (matched_fields, unknown_fields)) 
 
-    def _get_matches_count(self, x, fieldname, schema, subschemas):
+    def _get_matches(self, x, fieldname, schema, subschemas):
         debug("x %s", x)
         debug("fieldname %s", fieldname)
         debug("subschemas %s", subschemas)
 
         # Validate each subschema.  Count matches.
-        matches = 0
         errorlist = []
+        matched_schemas = []
+        not_matched_schemas = []
         unknown_fields = set(x[fieldname])
+        debug("initializing unknown_fields: %s", (unknown_fields))
         for subschema in subschemas:
-            debug("validate_anyOf fieldname %s", fieldname)
-            debug("validate_anyOf subschema %s", subschema)
             try:
+                debug("_get_matches: value: %s, subschema: %s, fieldname: %s, unknown_fields: %s", (x[fieldname], subschema, fieldname, unknown_fields))
                 self._validate(x[fieldname], subschema, fieldname, unknown_fields)
-                matches += 1
+                matched_schemas.append(subschema)
+                #debug("_get_matches_count matched subschema.  fieldname: %s, value: %s, subschema: %s", (fieldname, x[fieldname], subschema))
             except ValidationError as err:
                 errorlist.append(err)
-        return matches, errorlist, unknown_fields, set(x[fieldname]) - unknown_fields
+                not_matched_schemas.append(subschema)
+                #debug("_get_matches_count did not match subschema. fieldname: %s, value: %s, subschema: %s", (fieldname, x[fieldname], subschema))
+        return matched_schemas, not_matched_schemas, errorlist, unknown_fields, set(x[fieldname]) - unknown_fields
 
     def validate_enum(self, x, fieldname, schema, options=None, unknown_fields=None):
         '''
@@ -775,13 +803,13 @@ class SchemaValidator(object):
         self.__validate(fieldname, {fieldname: data}, schema, unknown_fields)
 
     def __validate(self, fieldname, data, schema, unknown_fields=None):
-
         if schema is not None:
             if not isinstance(schema, dict):
                 raise SchemaError(
                     "Type for field '%s' must be 'dict', got: '%s'" %
                     (fieldname, type(schema).__name__))
 
+            debug("__validate: %s ** %s ** %s ** %s", (fieldname, data, schema, unknown_fields))
             newschema = copy.copy(schema)
 
             if 'optional' in schema:
